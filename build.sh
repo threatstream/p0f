@@ -13,7 +13,7 @@ VERSION="3.07b"
 
 test "$CC" = "" && CC="gcc"
 
-BASIC_CFLAGS="-Wall -Wno-format -I/usr/local/include/ \
+BASIC_CFLAGS="-Wall -Wno-format -I/usr/local/include/ -Ilibhpfeeds/include/ \
               -I/opt/local/include/ -DVERSION=\"$VERSION\" $CFLAGS"
 
 BASIC_LDFLAGS="-L/usr/local/lib/ -L/opt/local/lib $LDFLAGS"
@@ -28,10 +28,10 @@ if [ "$OSTYPE" = "cygwin" ]; then
 elif [ "$OSTYPE" = "solaris" ]; then
   USE_LIBS="-lsocket -lnsl $LIBS"
 else
-  USE_LIBS="-lpcap $LIBS"
+  USE_LIBS="-lpcap -ljansson $LIBS"
 fi
 
-OBJFILES="api.c process.c fp_tcp.c fp_mtu.c fp_http.c readfp.c"
+OBJFILES="api.c process.c fp_tcp.c fp_mtu.c fp_http.c readfp.c hpfeed.c libhpfeeds/src/hpfeeds.c libhpfeeds/src/sha1.c"
 
 echo "Welcome to the build script for $PROGNAME $VERSION!"
 echo "Copyright (C) 2012 by Michal Zalewski <lcamtuf@coredump.cx>"

@@ -23,6 +23,7 @@
 #include <poll.h>
 #include <time.h>
 #include <locale.h>
+#include <jansson.h>
 
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -51,6 +52,7 @@
 #include "tcp.h"
 #include "fp_http.h"
 #include "p0f.h"
+#include "hpfeed.h"
 
 #ifndef PF_INET6
 #  define PF_INET6          10
@@ -63,6 +65,8 @@
 #ifndef O_LARGEFILE
 #  define O_LARGEFILE 0
 #endif /* !O_LARGEFILE */
+
+static json_t *json_record = NULL;
 
 static u8 *use_iface,                   /* Interface to listen on             */
           *orig_rule,                   /* Original filter rule               */
@@ -91,9 +95,11 @@ static FILE* lf;                        /* Log file stream                    */
 static u8 stop_soon;                    /* Ctrl-C or so pressed?              */
 
 u8 daemon_mode;                         /* Running in daemon mode?            */
+u8 json_mode;                           /* Log in JSON?                       */
+u8 line_buffered_mode;                  /* Line Buffered Mode?                */
 
 static u8 set_promisc;                  /* Use promiscuous mode?              */
-         
+
 static pcap_t *pt;                      /* PCAP capture thingy                */
 
 s32 link_type;                          /* PCAP link type                     */
@@ -102,6 +108,11 @@ u32 hash_seed;                          /* Hash seed                          */
 
 static u8 obs_fields;                   /* No of pending observation fields   */
 
+u8 hpfeed_mode;                         /* Report information to hpfeeds      */
+
+u64 observation_received;
+
+          
 /* Memory allocator data: */
 
 #ifdef DEBUG_BUILD
@@ -121,28 +132,40 @@ static void usage(void) {
 "\n"
 "Network interface options:\n"
 "\n"
-"  -i iface  - listen on the specified network interface\n"
-"  -r file   - read offline pcap data from a given file\n"
-"  -p        - put the listening interface in promiscuous mode\n"
-"  -L        - list all available interfaces\n"
+"  -i iface         - listen on the specified network interface\n"
+"  -r file          - read offline pcap data from a given file\n"
+"  -p               - put the listening interface in promiscuous mode\n"
+"  -L               - list all available interfaces\n"
 "\n"
 "Operating mode and output settings:\n"
 "\n"
-"  -f file   - read fingerprint database from 'file' (%s)\n"
-"  -o file   - write information to the specified log file\n"
+"  -f file          - read fingerprint database from 'file' (%s)\n"
+"  -o file          - write information to the specified log file\n"
+"  -j               - Log in JSON format.\n"
+"  -l               - Line buffered mode for logging to output file.\n"
+"  -h               - write information to hpfeeds\n"
 #ifndef __CYGWIN__
-"  -s name   - answer to API queries at a named unix socket\n"
+"  -s name          - answer to API queries at a named unix socket\n"
 #endif /* !__CYGWIN__ */
-"  -u user   - switch to the specified unprivileged account and chroot\n"
-"  -d        - fork into background (requires -o or -s)\n"
+"  -u user          - switch to the specified unprivileged account and chroot\n"
+"  -d               - fork into background (requires -o or -s)\n"
 "\n"
 "Performance-related options:\n"
 "\n"
 #ifndef __CYGWIN__
-"  -S limit  - limit number of parallel API connections (%u)\n"
+"  -S limit         - limit number of parallel API connections (%u)\n"
 #endif /* !__CYGWIN__ */
-"  -t c,h    - set connection / host cache age limits (%us,%um)\n"
-"  -m c,h    - cap the number of active connections / hosts (%u,%u)\n"
+"  -t c,h           - set connection / host cache age limits (%us,%um)\n"
+"  -m c,h           - cap the number of active connections / hosts (%u,%u)\n"
+"\n"
+"HPfeeds related options (used with -h flag):\n"
+"\n"
+"  -H ip or server  - server\n"
+"  -P port          - port (default: 10000)\n"
+"  -I identity      - ident\n"
+"  -K secret key    - secret\n"
+"  -C channel name  - channel (default: p0f.events)\n"
+"  -D number        - aggregation time window (default: 60)\n"
 "\n"
 "Optional filter expressions (man tcpdump) can be specified in the command\n"
 "line to prevent p0f from looking at incidental network traffic.\n"
@@ -210,7 +233,6 @@ static void close_spare_fds(void) {
     SAYF("[+] Closed %u file descriptor%s.\n", closed, closed == 1 ? "" : "s" );
 
 }
-
 
 /* Create or open log file */
 
@@ -325,7 +347,7 @@ void start_observation(char* keyword, u8 field_cnt, u8 to_srv,
 
   }
 
-  if (log_file) {
+  if (json_mode || log_file || hpfeed_mode) {
 
     u8 tmp[64];
 
@@ -334,16 +356,35 @@ void start_observation(char* keyword, u8 field_cnt, u8 to_srv,
 
     strftime((char*)tmp, 64, "%Y/%m/%d %H:%M:%S", lt);
 
-    LOGF("[%s] mod=%s|cli=%s/%u|",tmp, keyword, addr_to_str(f->client->addr,
-         f->client->ip_ver), f->cli_port);
+    if (json_mode || hpfeed_mode) {
 
-    LOGF("srv=%s/%u|subj=%s", addr_to_str(f->server->addr, f->server->ip_ver),
-         f->srv_port, to_srv ? "cli" : "srv");
+      json_record = json_object();
+    
+      json_object_set_new(json_record, "timestamp", json_string((char *)tmp));
+      
+      if (hpfeed_mode)
+        json_object_set_new(json_record, "timestamp_raw", json_integer(ut));
+
+      json_object_set_new(json_record, "mod", json_string((char *)keyword));
+      json_object_set_new(json_record, "client_ip", json_string((char *)addr_to_str(f->client->addr, f->client->ip_ver)));
+      json_object_set_new(json_record, "server_ip", json_string((char *)addr_to_str(f->server->addr, f->server->ip_ver)));
+      json_object_set_new(json_record, "client_port", json_integer(f->cli_port));
+      json_object_set_new(json_record, "server_port", json_integer(f->srv_port));
+      json_object_set_new(json_record, "subject", json_string((char *)(to_srv ? "cli" : "srv")));
+    }
+
+    if (log_file && !json_mode) {
+
+        LOGF("[%s] mod=%s|cli=%s/%u|",tmp, keyword, addr_to_str(f->client->addr,
+           f->client->ip_ver), f->cli_port);
+
+        LOGF("srv=%s/%u|subj=%s", addr_to_str(f->server->addr, f->server->ip_ver),
+           f->srv_port, to_srv ? "cli" : "srv");
+    }
 
   }
 
   obs_fields = field_cnt;
-
 }
 
 
@@ -356,15 +397,35 @@ void add_observation_field(char* key, u8* value) {
   if (!daemon_mode)
     SAYF("| %-8s = %s\n", key, value ? value : (u8*)"???");
 
-  if (log_file) LOGF("|%s=%s", key, value ? value : (u8*)"???");
+  if (json_mode || hpfeed_mode)
+      json_object_set_new(json_record, key, json_string( (char *)(value ? value : (u8*)"???") ));
+
+  if (log_file && !json_mode) 
+      LOGF("|%s=%s", key, value ? value : (u8*)"???");
 
   obs_fields--;
 
   if (!obs_fields) {
 
+    observation_received++;
+
     if (!daemon_mode) SAYF("|\n`----\n\n");
 
-    if (log_file) LOGF("\n");
+    if (hpfeed_mode)
+      hpfeed_add_observation(json_copy(json_record));
+
+    if (log_file){
+
+      if (json_mode) {
+        json_dumpf(json_record, lf, 0);
+        json_decref(json_record);
+      }
+
+      LOGF("\n");
+      if (line_buffered_mode) {
+        fflush(lf);
+      }
+    }
 
   }
 
@@ -1023,7 +1084,7 @@ int main(int argc, char** argv) {
   if (getuid() != geteuid())
     FATAL("Please don't make me setuid. See README for more.\n");
 
-  while ((r = getopt(argc, argv, "+LS:df:i:m:o:pr:s:t:u:")) != -1) switch (r) {
+  while ((r = getopt(argc, argv, "+LS:djlf:i:m:o:pr:s:t:u:hH:P:I:K:C:D:")) != -1) switch (r) {
 
     case 'L':
 
@@ -1074,6 +1135,22 @@ int main(int argc, char** argv) {
 
       use_iface = (u8*)optarg;
 
+      break;
+
+    case 'j':
+
+      if (json_mode)
+        FATAL("Double werewolf mode not supported yet.");
+
+      json_mode = 1;
+      break;
+
+    case 'l':
+
+      if (line_buffered_mode)
+        FATAL("Double werewolf mode not supported yet.");
+
+      line_buffered_mode = 1;
       break;
 
     case 'm':
@@ -1152,6 +1229,70 @@ int main(int argc, char** argv) {
 
       break;
 
+    case 'h':
+
+      if (hpfeed_mode)
+        FATAL("Flag -h already set");
+
+      hpfeed_mode = 1;
+
+      break;
+
+    case 'H':
+      
+      if (hpfeed_mode && hpfeed_host)
+        FATAL("Multiple -H not supported");
+
+      hpfeed_host = (s8 *)optarg;
+
+      break;
+
+    case 'P':
+
+      hpfeed_port = atoi(optarg);
+
+      if (hpfeed_port < 0 && hpfeed_port > 65535)
+        FATAL("Set hpfeed port in range proper range");
+
+      break;
+
+    case 'I':
+
+      if (hpfeed_mode && hpfeed_ident)
+        FATAL("Multiple -I not supported");
+
+      hpfeed_ident = (s8 *)optarg;
+
+      break;
+
+    case 'K':
+
+      if (hpfeed_mode && hpfeed_secret)
+        FATAL("Multiple -K not supported");
+
+      hpfeed_secret = (s8 *)optarg;
+
+      break;
+
+    case 'C':
+
+      if (hpfeed_mode && hpfeed_channel)
+        FATAL("Multiple -C not supported");
+
+      hpfeed_channel = (s8 *)optarg;
+
+      break;
+
+    case 'D':
+
+      hpfeed_delta = atoi(optarg);
+
+      if (hpfeed_delta < 0)
+        FATAL("Aggregation time must be positive");
+
+      break;
+
+
     default: usage();
 
   }
@@ -1162,6 +1303,9 @@ int main(int argc, char** argv) {
     else FATAL("Filter rule must be a single parameter (use quotes).");
 
   }
+
+  if (hpfeed_mode && !hpfeed_channel && !hpfeed_secret && !hpfeed_ident && !hpfeed_host)
+    FATAL("When using hpfeed options -H -I -K required");
 
   if (read_file && api_sock)
     FATAL("API mode looks down on ofline captures.");
@@ -1202,12 +1346,15 @@ int main(int argc, char** argv) {
 
   read_config(fp_file ? fp_file : (u8*)FP_FILE);
 
+  /* we need to open connection to hpfeed early as possible before pcap */
+  if (hpfeed_mode) hpfeed_connect();
+
   prepare_pcap();
   prepare_bpf();
 
   if (log_file) open_log();
   if (api_sock) open_api();
-  
+
   if (daemon_mode) {
     null_fd = open("/dev/null", O_RDONLY);
     if (null_fd < 0) PFATAL("Cannot open '/dev/null'.");
@@ -1223,8 +1370,15 @@ int main(int argc, char** argv) {
 
   if (read_file) offline_event_loop(); else live_event_loop();
 
-  if (!daemon_mode)
-    SAYF("\nAll done. Processed %llu packets.\n", packet_cnt);
+  if (hpfeed_mode) hpfeed_close();
+
+  if (!daemon_mode){
+    struct pcap_stat pstat;
+    pcap_stats(pt, &pstat);
+
+    SAYF("\n[+] pcap.stats: recieved %d, droped: %d\n", pstat.ps_recv, pstat.ps_drop);
+    SAYF("All done. Processed %llu packets. Total observations: %llu\n", packet_cnt,observation_received);
+  }
 
 #ifdef DEBUG_BUILD
   destroy_all_hosts();
