@@ -1,7 +1,0 @@
-{
-    "HOST": "127.0.0.1",
-    "PORT": 10000,
-    "IDENT": "p0f", 
-    "SECRET": "p0fs3cr37",
-    "PUB_CHANNEL": "p0f.events"
-}
