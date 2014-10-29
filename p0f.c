@@ -52,7 +52,7 @@
 #include "tcp.h"
 #include "fp_http.h"
 #include "p0f.h"
-#include "hpfeed.h"
+#include "hpfeeds.h"
 
 #ifndef PF_INET6
 #  define PF_INET6          10
@@ -108,7 +108,7 @@ u32 hash_seed;                          /* Hash seed                          */
 
 static u8 obs_fields;                   /* No of pending observation fields   */
 
-u8 hpfeed_mode;                         /* Report information to hpfeeds      */
+u8 hpfeeds_mode;                         /* Report information to hpfeeds      */
 
 u64 observation_received;
 
@@ -347,7 +347,7 @@ void start_observation(char* keyword, u8 field_cnt, u8 to_srv,
 
   }
 
-  if (json_mode || log_file || hpfeed_mode) {
+  if (json_mode || log_file || hpfeeds_mode) {
 
     u8 tmp[64];
 
@@ -356,13 +356,13 @@ void start_observation(char* keyword, u8 field_cnt, u8 to_srv,
 
     strftime((char*)tmp, 64, "%Y/%m/%d %H:%M:%S", lt);
 
-    if (json_mode || hpfeed_mode) {
+    if (json_mode || hpfeeds_mode) {
 
       json_record = json_object();
     
       json_object_set_new(json_record, "timestamp", json_string((char *)tmp));
       
-      if (hpfeed_mode)
+      if (hpfeeds_mode)
         json_object_set_new(json_record, "timestamp_raw", json_integer(ut));
 
       json_object_set_new(json_record, "mod", json_string((char *)keyword));
@@ -397,7 +397,7 @@ void add_observation_field(char* key, u8* value) {
   if (!daemon_mode)
     SAYF("| %-8s = %s\n", key, value ? value : (u8*)"???");
 
-  if (json_mode || hpfeed_mode)
+  if (json_mode || hpfeeds_mode)
       json_object_set_new(json_record, key, json_string( (char *)(value ? value : (u8*)"???") ));
 
   if (log_file && !json_mode) 
@@ -411,8 +411,8 @@ void add_observation_field(char* key, u8* value) {
 
     if (!daemon_mode) SAYF("|\n`----\n\n");
 
-    if (hpfeed_mode)
-      hpfeed_add_observation(json_copy(json_record));
+    if (hpfeeds_mode)
+      hpfeeds_add_observation(json_copy(json_record));
 
     if (log_file){
 
@@ -1231,63 +1231,63 @@ int main(int argc, char** argv) {
 
     case 'h':
 
-      if (hpfeed_mode)
+      if (hpfeeds_mode)
         FATAL("Flag -h already set");
 
-      hpfeed_mode = 1;
+      hpfeeds_mode = 1;
 
       break;
 
     case 'H':
       
-      if (hpfeed_mode && hpfeed_host)
+      if (hpfeeds_mode && hpfeeds_host)
         FATAL("Multiple -H not supported");
 
-      hpfeed_host = (s8 *)optarg;
+      hpfeeds_host = (s8 *)optarg;
 
       break;
 
     case 'P':
 
-      hpfeed_port = atoi(optarg);
+      hpfeeds_port = atoi(optarg);
 
-      if (hpfeed_port < 0 && hpfeed_port > 65535)
-        FATAL("Set hpfeed port in range proper range");
+      if (hpfeeds_port < 0 && hpfeeds_port > 65535)
+        FATAL("Set hpfeeds port in range proper range");
 
       break;
 
     case 'I':
 
-      if (hpfeed_mode && hpfeed_ident)
+      if (hpfeeds_mode && hpfeeds_ident)
         FATAL("Multiple -I not supported");
 
-      hpfeed_ident = (s8 *)optarg;
+      hpfeeds_ident = (s8 *)optarg;
 
       break;
 
     case 'K':
 
-      if (hpfeed_mode && hpfeed_secret)
+      if (hpfeeds_mode && hpfeeds_secret)
         FATAL("Multiple -K not supported");
 
-      hpfeed_secret = (s8 *)optarg;
+      hpfeeds_secret = (s8 *)optarg;
 
       break;
 
     case 'C':
 
-      if (hpfeed_mode && hpfeed_channel)
+      if (hpfeeds_mode && hpfeeds_channel)
         FATAL("Multiple -C not supported");
 
-      hpfeed_channel = (s8 *)optarg;
+      hpfeeds_channel = (s8 *)optarg;
 
       break;
 
     case 'D':
 
-      hpfeed_delta = atoi(optarg);
+      hpfeeds_delta = atoi(optarg);
 
-      if (hpfeed_delta < 0)
+      if (hpfeeds_delta < 0)
         FATAL("Aggregation time must be positive");
 
       break;
@@ -1304,8 +1304,8 @@ int main(int argc, char** argv) {
 
   }
 
-  if (hpfeed_mode && !hpfeed_channel && !hpfeed_secret && !hpfeed_ident && !hpfeed_host)
-    FATAL("When using hpfeed options -H -I -K required");
+  if (hpfeeds_mode && !hpfeeds_channel && !hpfeeds_secret && !hpfeeds_ident && !hpfeeds_host)
+    FATAL("When using hpfeeds options -H -I -K required");
 
   if (read_file && api_sock)
     FATAL("API mode looks down on ofline captures.");
@@ -1346,8 +1346,8 @@ int main(int argc, char** argv) {
 
   read_config(fp_file ? fp_file : (u8*)FP_FILE);
 
-  /* we need to open connection to hpfeed early as possible before pcap */
-  if (hpfeed_mode) hpfeed_connect();
+  /* we need to open connection to hpfeeds early as possible before pcap */
+  if (hpfeeds_mode) hpfeeds_connect();
 
   prepare_pcap();
   prepare_bpf();
@@ -1370,7 +1370,7 @@ int main(int argc, char** argv) {
 
   if (read_file) offline_event_loop(); else live_event_loop();
 
-  if (hpfeed_mode) hpfeed_close();
+  if (hpfeeds_mode) hpfeeds_close();
 
   if (!daemon_mode){
     struct pcap_stat pstat;

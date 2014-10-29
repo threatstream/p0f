@@ -1,5 +1,5 @@
 /* 
-    p0f hpfeed native reporting
+    p0f hpfeeds native reporting
 */ 
 
 #include <arpa/inet.h>
@@ -14,12 +14,12 @@
 
 #include "types.h"
 #include "debug.h"
-#include "hpfeed.h"
+#include "hpfeeds.h"
 
 #define READ_BLOCK_SIZE 32767
 
-static hpfeed_session_state_t hpfeed_state;
-static s8 default_hpfeed_channel[] = "p0f.events";
+static hpfeeds_session_state_t hpfeeds_state;
+static s8 default_hpfeeds_channel[] = "p0f.events";
 static s32 s = -1;
 
 static observation_node_t *observation_root = NULL;
@@ -32,17 +32,17 @@ static u64 observations_received = 0;
 
 struct pollfd pfd;
 
-s8  *hpfeed_host,                  
-    *hpfeed_ident,             
-    *hpfeed_secret,        
-    *hpfeed_channel;            
+s8  *hpfeeds_host,                  
+    *hpfeeds_ident,             
+    *hpfeeds_secret,        
+    *hpfeeds_channel;            
 
-u16 hpfeed_port = 10000,
-    hpfeed_delta = 60;
+u16 hpfeeds_port = 10000,
+    hpfeeds_delta = 60;
 
 /* read message from socket */
 
-u8 *hpfeed_read_msg(int sock) {
+u8 *hpfeeds_read_msg(int sock) {
 
   u8 *buffer;
   u32 msglen;
@@ -52,10 +52,10 @@ u8 *hpfeed_read_msg(int sock) {
   s8 tempbuf[READ_BLOCK_SIZE];
 
   if (read(s, &msglen, 4) != 4)
-    FATAL("[+] p0f.hpfeed: Fatal read()");
+    FATAL("[+] p0f.hpfeeds: Fatal read()");
 
   if ((buffer = malloc(ntohl(msglen))) == NULL)
-    FATAL("[+] p0f.hpfeed: Fatal malloc()");
+    FATAL("[+] p0f.hpfeeds: Fatal malloc()");
 
   *(u32 *) buffer = msglen;
   msglen = ntohl(msglen);
@@ -69,44 +69,44 @@ u8 *hpfeed_read_msg(int sock) {
     }
 
   if (len != msglen)
-    FATAL("[+] p0f.hpfeed: Fatal read()");
+    FATAL("[+] p0f.hpfeeds: Fatal read()");
 
   return buffer;
 }
 
-void hpfeed_get_error(hpf_msg_t *msg) {
+void hpfeeds_get_error(hpf_msg_t *msg) {
 
   s8 *errmsg;
 
-  if (msg) {
+  if (msg != NULL) {
     if ((errmsg = calloc(1, msg->hdr.msglen - sizeof(msg->hdr))) == NULL)
-      FATAL("[+] p0f.hpfeed: Fatal write()");
+      FATAL("[+] p0f.hpfeeds: Fatal write()");
           
     memcpy(errmsg, msg->data, ntohl(msg->hdr.msglen) - sizeof(msg->hdr));
 
-    SAYF("[+] p0f.hpfeed: server error: '%s'\n", errmsg);
+    SAYF("[+] p0f.hpfeeds: server error: '%s'\n", errmsg);
 
     free(errmsg);
     free(msg);
   }
 }
 
-void hpfeed_close() {
+void hpfeeds_close() {
 
-  SAYF("[+] p0f.hpfeed: sent %llu, received %llu, duplicated %llu observations\n", \
+  SAYF("[+] p0f.hpfeeds: sent %llu, received %llu, duplicated %llu observations\n", \
         observations_sent, observations_received, observations_duplicate);
 
   if (s != -1) close(s);
 }
 
-/* open connection to hpfeed */
+/* open connection to hpfeeds */
 
-void hpfeed_connect() {
+void hpfeeds_connect() {
 
   /* socket already on - returning */
   if (s != -1) return;
 
-  hpf_msg_t *msg;
+  hpf_msg_t *msg = NULL;
   hpf_chunk_t *chunk;
   u8 *data;
 
@@ -115,23 +115,23 @@ void hpfeed_connect() {
   struct hostent *he;
   struct sockaddr_in host;
 
-  if (!hpfeed_channel)
-    hpfeed_channel = default_hpfeed_channel;
+  if (!hpfeeds_channel)
+    hpfeeds_channel = default_hpfeeds_channel;
 
   memset(&host, 0, sizeof(struct sockaddr_in));
   host.sin_family = AF_INET;
-  host.sin_port = htons(hpfeed_port);
+  host.sin_port = htons(hpfeeds_port);
 
-  if ((he = gethostbyname((char *)hpfeed_host)) == NULL)
-    FATAL("[+] p0f.hpfeed: Fatal gethostbyname()");
+  if ((he = gethostbyname((char *)hpfeeds_host)) == NULL)
+    FATAL("[+] p0f.hpfeeds: Fatal gethostbyname()");
 
   host.sin_addr = *(struct in_addr *) he->h_addr;
 
   if ((s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) == -1)
-    FATAL("[+] p0f.hpfeed: Fatal socket()");
+    FATAL("[+] p0f.hpfeeds: Fatal socket()");
 
   if (connect(s, (struct sockaddr *) &host, sizeof(host)) == -1)
-    FATAL("[+] p0f.hpfeed: Fatal connect()");
+    FATAL("[+] p0f.hpfeeds: Fatal connect()");
 
   /* Set poll fd */
   pfd.fd = s;
@@ -142,21 +142,21 @@ void hpfeed_connect() {
   int optval = 1;
 
   if(setsockopt(s, SOL_SOCKET, SO_KEEPALIVE, &optval, sizeof(optval)) < 0) {
-      FATAL("[+] p0f.hpfeed: Fatal setsockopt()");
+      FATAL("[+] p0f.hpfeeds: Fatal setsockopt()");
       close(s);
       s = -1;
       return;
    }
 
-  hpfeed_state = S_INIT;
+  hpfeeds_state = S_INIT;
 
   for (;;) { 
 
-    switch (hpfeed_state) {
+    switch (hpfeeds_state) {
 
       case S_INIT:
 
-        if ((data = hpfeed_read_msg(s)) == NULL) 
+        if ((data = hpfeeds_read_msg(s)) == NULL) 
           break;
 
         msg = (hpf_msg_t *) data;
@@ -168,49 +168,49 @@ void hpfeed_connect() {
             chunk = hpf_msg_get_chunk(data + sizeof(msg->hdr), ntohl(msg->hdr.msglen) - sizeof(msg->hdr));
 
             if (!chunk) { 
-              SAYF("[+] p0f.hpfeed: invalid message format");
-              hpfeed_state = S_TERMINATE;
+              SAYF("[+] p0f.hpfeeds: invalid message format");
+              hpfeeds_state = S_TERMINATE;
               break;
             }
 
             nonce = *(u_int32_t *) (data + sizeof(msg->hdr) + chunk->len + 1);
-            hpfeed_state = S_AUTH;
+            hpfeeds_state = S_AUTH;
 
             free(data);
             break;
 
           case OP_ERROR:
-            hpfeed_state = S_ERROR;
+            hpfeeds_state = S_ERROR;
             break;
 
           default:
             
-            hpfeed_state = S_TERMINATE;
-            SAYF("[+] p0f.hpfeed: unknown server message (type %u)\n", msg->hdr.opcode);
+            hpfeeds_state = S_TERMINATE;
+            SAYF("[+] p0f.hpfeeds: unknown server message (type %u)\n", msg->hdr.opcode);
             break;
         }
 
       case S_AUTH:
 
-        SAYF("[+] p0f.hpfeed: sending authentication.\n");
+        SAYF("[+] p0f.hpfeeds: sending authentication.\n");
 
-        msg = hpf_msg_auth(nonce, (u8 *) hpfeed_ident, strlen((char *)hpfeed_ident) \
-                           ,(u8 *) hpfeed_secret, strlen((char *)hpfeed_secret));
+        msg = hpf_msg_auth(nonce, (u8 *) hpfeeds_ident, strlen((char *)hpfeeds_ident) \
+                           ,(u8 *) hpfeeds_secret, strlen((char *)hpfeeds_secret));
 
         if (write(s, (u_char *) msg, ntohl(msg->hdr.msglen)) == -1)
-          FATAL("[+] p0f.hpfeed: Fatal write()");
+          FATAL("[+] p0f.hpfeeds: Fatal write()");
 
         int rv = poll(&pfd, 1, 1000);
 
         if (rv == 0) {
-          hpfeed_state = S_AUTH_DONE;
-          SAYF("[+] p0f.hpfeed: Authentication done.\n");
+          hpfeeds_state = S_AUTH_DONE;
+          SAYF("[+] p0f.hpfeeds: Authentication done.\n");
           hpf_msg_delete(msg);
         }
         else if (rv > 0 && pfd.revents && POLLIN) {
-          hpfeed_state = S_ERROR;
+          hpfeeds_state = S_ERROR;
 
-          if ((msg = (hpf_msg_t *) hpfeed_read_msg(s)) == NULL) 
+          if ((msg = (hpf_msg_t *) hpfeeds_read_msg(s)) == NULL) 
             break;
         }
 
@@ -219,20 +219,20 @@ void hpfeed_connect() {
       case S_ERROR:
 
         if (msg)
-          hpfeed_get_error(msg);
+          hpfeeds_get_error(msg);
 
-        hpfeed_state = S_TERMINATE;
+        hpfeeds_state = S_TERMINATE;
         break;
 
       case S_TERMINATE:
       default:
         close(s);
         s = -1;
-        SAYF("[+] p0f.hpfeed: connection terminated...\n");
+        SAYF("[+] p0f.hpfeeds: connection terminated...\n");
         break;
       }
 
-    if (hpfeed_state == S_AUTH_DONE || s == -1)
+    if (hpfeeds_state == S_AUTH_DONE || s == -1)
       break;
   }
 }
@@ -292,12 +292,12 @@ void init_list(json_t *observation, time_t timestamp) {
     observation_root->data = observation;
     observation_root->timestamp = timestamp;
 
-    hpfeed_publish(observation_root);
+    hpfeeds_publish(observation_root);
 }
 
-/* publish hpfeed observation to p0f */
+/* publish hpfeeds observation to p0f */
 
-void hpfeed_add_observation(json_t *observation) {
+void hpfeeds_add_observation(json_t *observation) {
 
   if (s == -1) return;
 
@@ -324,7 +324,7 @@ void hpfeed_add_observation(json_t *observation) {
   while(current != NULL) {
 
     /* There are older entries than current one */
-    if (observation_timestamp > current->timestamp + hpfeed_delta) {
+    if (observation_timestamp > current->timestamp + hpfeeds_delta) {
 
       if (current == observation_root)
         empty_list = 1;   
@@ -367,7 +367,7 @@ void hpfeed_add_observation(json_t *observation) {
       new->data = observation;
       new->timestamp = observation_timestamp;
 
-      hpfeed_publish(observation_root);
+      hpfeeds_publish(observation_root);
 
       current = current->next;
     }
@@ -384,20 +384,20 @@ void hpfeed_add_observation(json_t *observation) {
 }
 
 
-/* publish message to hpfeed channel */
+/* publish message to hpfeeds channel */
 
-void hpfeed_publish(struct observation_node * observation) {
+void hpfeeds_publish(struct observation_node * observation) {
 
   char *data = json_dumps(observation->data, 0);
   u32 len = strlen((char *)data);
 
   hpf_msg_t *msg;
 
-  msg = hpf_msg_publish((u8 *) hpfeed_ident, strlen((char *)hpfeed_ident) \
-                        ,(u8 *) hpfeed_channel, strlen((char *)hpfeed_channel), (u8 *)data, len);
+  msg = hpf_msg_publish((u8 *) hpfeeds_ident, strlen((char *)hpfeeds_ident) \
+                        ,(u8 *) hpfeeds_channel, strlen((char *)hpfeeds_channel), (u8 *)data, len);
   
   if (write(s, (u8 *) msg, ntohl(msg->hdr.msglen)) == -1)
-    FATAL("[+] p0f.hpfeed: Fatal write()");
+    FATAL("[+] p0f.hpfeeds: Fatal write()");
 
 
   /* Do another socket poll - in case of wrong channel */
@@ -408,13 +408,13 @@ void hpfeed_publish(struct observation_node * observation) {
 
     if (rv == 0) {
       init_publish_done = 1;
-      SAYF("[+] p0f.hpfeed: Initial publish done.\n");
+      SAYF("[+] p0f.hpfeeds: Initial publish done.\n");
     }
     else if (rv > 0 && pfd.revents && POLLIN) {
             
-      if ((error_msg = (hpf_msg_t *) hpfeed_read_msg(s)) != NULL) {
+      if ((error_msg = (hpf_msg_t *) hpfeeds_read_msg(s)) != NULL) {
         
-        hpfeed_get_error(error_msg);
+        hpfeeds_get_error(error_msg);
 
         SAYF("[+] p0f.events: Failed to publish.\n");
 
