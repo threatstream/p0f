@@ -1,0 +1,12 @@
+version: '2'
+services:
+  p0f:
+    build: 
+     context: .
+    network_mode: "host"  #bridge host none container:[service name]  container:[container name/id]
+    image: hallmanhe/p0f
+    container_name: p0f
+    volumes:
+     - /root/p0f_honeypot:/var/log/p0f
+#    stdin_open: true # -i
+#    tty: true # -t
